@@ -248,36 +248,6 @@ chatgpt-register export -c config.yaml -i registered_accounts.json -o sub2api_bu
 
 默认情况下，完整 `run` 的前三个文件会进入 `runs/YYYYMMDD-HHMMSS_<count>_accounts/`。
 
-## 开源脱敏清单
-
-公开仓库建议只保留：
-
-- `chatgpt_register_sub2api/`
-- `README.md`
-- `pyproject.toml`
-- `.gitignore`
-- `config.example.yaml`
-
-不要提交：
-
-- `config.yaml` 或 `config.local.yaml`
-- `data/`
-- `runs/`
-- `registered_accounts*.json`
-- `sub2api*.json`
-- `*.log`
-- `test_run*.log`
-- `__pycache__/`
-- `.pytest_cache/`
-- 虚拟环境和构建产物
-
-发布前建议扫描敏感内容：
-
-```bash
-rg -n "outlook.com|refresh_token|access_token|id_token|session_token|workspace" .
-```
-
-占位示例可以保留；真实邮箱、OAuth token、导出 JSON、workspace ID 不应出现在公开仓库中。
 
 ## 注意事项
 
