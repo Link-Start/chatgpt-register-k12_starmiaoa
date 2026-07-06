@@ -1,9 +1,3 @@
-# chatgpt-register-sub2api
-
-ChatGPT 账号注册、工作空间上下文刷新、Sub2API JSON 导出工具。
-
-这是脱敏后的开源版本，只包含源码和示例配置，不包含真实邮箱、密码、refresh token、workspace ID、运行日志、状态文件或导出的账号 JSON。
-
 ## 功能
 
 - Outlook OAuth 邮箱池：`email----password----client_id----refresh_token`
@@ -297,4 +291,4 @@ rg -n "outlook.com|refresh_token|access_token|id_token|session_token|workspace" 
 
 ## 致谢
 
-核心注册流程参考了社区围绕 `chatgpt2api` 的实现，并在此基础上增加了 workspace 处理和 Sub2API 导出。
+感谢 [LINUX DO](https://linux.do/) 社区的交流与支持。
