@@ -253,28 +253,6 @@ runs/YYYYMMDD-HHMMSS_<账号数量>_accounts/
 
 - `data/outlook_token_state.json`：邮箱和别名的 used/failed/in_use 状态
 
-## 开源脱敏清单
-
-公开目录建议只保留：
-
-- `chatgpt_register_sub2api/`
-- `README.md`
-- `pyproject.toml`
-- `.gitignore`
-- `config.example.yaml`
-
-不要提交：
-
-- `config.yaml` 或 `config.local.yaml`
-- `data/` 或 `runs/`
-- `registered_accounts*.json`
-- `sub2api*.json`
-- `*.log` 或 `test_run*.log`
-- `tests/`、`__pycache__/`、`.pytest_cache/`
-- 虚拟环境、构建产物、缓存目录
-
-发布前可以先扫一遍：
-
 ```bash
 rg -n "outlook.com|refresh_token|access_token|id_token|session_token|workspace" .
 ```
