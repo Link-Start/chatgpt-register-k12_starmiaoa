@@ -9,7 +9,7 @@ mail:
       # false: one ChatGPT account per Outlook mailbox
       # true: main address + aliases, limited by alias_limit_per_mailbox
       alias_enabled: false
-      alias_limit_per_mailbox: 6
+      alias_limit_per_mailbox: 5
       mailboxes: |
         user1@outlook.com----password1----client_id_1----refresh_token_1
         user2@hotmail.com----password2----client_id_2----refresh_token_2
@@ -24,7 +24,7 @@ mail:
   wait_timeout: 45
   wait_interval: 3
   alias_enabled: false
-  alias_limit_per_mailbox: 6
+  alias_limit_per_mailbox: 5
 
 proxy:
   url: "socks5://127.0.0.1:1080"
@@ -55,6 +55,13 @@ sub2api:
   output_file: "sub2api_bundle.json"
   # auto: follow workspace.re_login_enabled; true: force team-only; false: allow personal tokens
   require_team_tokens: auto
+  # Export only accounts that still pass a live ChatGPT backend token check.
+  health_check: true
+  health_check_endpoint: models
+  health_check_timeout: 30
+  health_check_retries: 2
+  health_check_backoff_ms: 3000
+  health_check_delay_seconds: 5
 
 output:
   # Full `run` outputs go under runs/YYYYMMDD-HHMMSS_<count>_accounts/

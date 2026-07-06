@@ -1188,7 +1188,7 @@ def _make_config(mail_config: dict) -> dict:
         "state_file": str(state_file),
         "alias_enabled": _bool_value(mail_config.get("alias_enabled"), False),
         "alias_limit_per_mailbox": _positive_int(
-            mail_config.get("alias_limit_per_mailbox") or 6,
+            mail_config.get("alias_limit_per_mailbox") or 5,
             6,
         ),
     }

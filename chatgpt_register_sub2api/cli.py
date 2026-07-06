@@ -242,7 +242,7 @@ def cmd_refresh(args) -> int:
     accounts = run_refresh_tokens(config, accounts)
     save_accounts(input_file, accounts)
 
-    checked = sum(1 for a in accounts if a.get("plan_type") or a.get("chatgpt_account_id"))
+    checked = sum(1 for a in accounts if a.get("refresh_status") == "ok")
     print(f"\nRefreshed/checked: {checked}/{len(accounts)} accounts")
     return 0 if checked else 1
 

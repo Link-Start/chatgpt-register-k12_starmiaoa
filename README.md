@@ -103,7 +103,6 @@ user+1@outlook.com
 user+2@outlook.com
 user+3@outlook.com
 user+4@outlook.com
-user+5@outlook.com
 ```
 
 配置示例：
@@ -115,7 +114,7 @@ mail:
       enable: true
       mode: auto
       alias_enabled: true
-      alias_limit_per_mailbox: 6
+      alias_limit_per_mailbox: 5
       mailboxes: |
         user@outlook.com----mail_password----client_id----refresh_token
 
@@ -133,13 +132,13 @@ workspace:
 运行：
 
 ```bash
-chatgpt-register run -c config.yaml -n 6 -t 3 --workspace-id <workspace-uuid> -v
+chatgpt-register run -c config.yaml -n 5 -t 3 --workspace-id <workspace-uuid> -v
 ```
 
 结果文件位于：
 
 ```text
-runs/YYYYMMDD-HHMMSS_6_accounts/sub2api_bundle.json
+runs/YYYYMMDD-HHMMSS_5_accounts/sub2api_bundle.json
 ```
 
 ## 配置说明
@@ -164,7 +163,7 @@ email----client_id----client_secret----refresh_token
 
 ```yaml
 alias_enabled: true
-alias_limit_per_mailbox: 6
+alias_limit_per_mailbox: 5
 ```
 
 含义：
@@ -173,6 +172,8 @@ alias_limit_per_mailbox: 6
 - `alias_limit_per_mailbox`：每个主邮箱最多使用多少个注册地址，包含主邮箱本身
 
 验证码仍从主 Outlook 邮箱读取；注册邮箱地址则按具体别名区分。
+
+默认建议每个主邮箱使用 5 个地址（主邮箱 + `+1` 到 `+4`）。如果你明确要尝试第 6 个地址，可以把 `alias_limit_per_mailbox` 改成 `6`，但 Outlook/目标服务对第 6 个别名更容易出现验证码超时或后续 token 吊销。
 
 ### Workspace
 
@@ -193,6 +194,19 @@ workspace:
 - `k12_request`
 
 默认推荐通过 refresh/check 确认账号当前 workspace 上下文，再导出 Sub2API JSON。
+
+### 导出健康检查
+
+```yaml
+sub2api:
+  require_team_tokens: auto
+  health_check: true
+  health_check_endpoint: models
+  health_check_retries: 2
+  health_check_delay_seconds: 5
+```
+
+`health_check` 开启后，导出前会用 ChatGPT backend 做一次轻量检查。已经被服务端吊销、返回 `token_invalidated`、或检查接口异常的账号不会写入 `sub2api_bundle.json`。因此导出数量可能少于注册成功数量，这是为了避免导入 Sub2API 后立刻 401。
 
 ### 输出归档
 
@@ -219,7 +233,7 @@ output:
 示例：
 
 ```bash
-chatgpt-register register -c config.yaml -n 6 -t 3 -v
+chatgpt-register register -c config.yaml -n 5 -t 3 -v
 chatgpt-register join-workspace -c config.yaml -i registered_accounts.json --workspace-id <workspace-uuid> -t 5 -v
 chatgpt-register refresh -c config.yaml -i registered_accounts.json --workspace-id <workspace-uuid> -t 5 -v
 chatgpt-register export -c config.yaml -i registered_accounts.json -o sub2api_bundle.json -v

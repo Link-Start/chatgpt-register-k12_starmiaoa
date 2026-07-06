@@ -23,7 +23,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "label": "Outlook Pool",
                 "mode": "auto",
                 "alias_enabled": False,
-                "alias_limit_per_mailbox": 6,
+                "alias_limit_per_mailbox": 5,
                 "mailboxes": "",
             },
             {
@@ -39,7 +39,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "wait_timeout": 30,
         "wait_interval": 2,
         "alias_enabled": False,
-        "alias_limit_per_mailbox": 6,
+        "alias_limit_per_mailbox": 5,
     },
     "proxy": {
         "url": "",
@@ -67,6 +67,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,
         "output_file": "sub2api_bundle.json",
         "require_team_tokens": "auto",
+        "health_check": True,
+        "health_check_endpoint": "models",
+        "health_check_timeout": 30,
+        "health_check_retries": 2,
+        "health_check_backoff_ms": 3000,
+        "health_check_delay_seconds": 5,
     },
     "output": {
         "archive_runs": True,

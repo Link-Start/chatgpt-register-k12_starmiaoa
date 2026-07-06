@@ -44,6 +44,16 @@ WORKSPACE_PLAN_TYPES = {
     "team",
 }
 DEFAULT_WORKSPACE_EXPORT_PLAN = "k12"
+DEFAULT_HEALTH_CHECK_ENDPOINT = "models"
+HEALTH_CHECK_ENDPOINTS = {
+    "check": "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27",
+    "models": "https://chatgpt.com/backend-api/models",
+}
+TOKEN_INVALID_MARKERS = (
+    "token_invalidated",
+    "authentication token has been invalidated",
+    "please try signing in again",
+)
 
 
 def _now() -> str:
@@ -110,6 +120,26 @@ def _positive_int(value: Any, default: int = 1) -> int:
         return max(1, int(default))
 
 
+def _nonnegative_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return max(0.0, float(default))
+
+
+def _bool_config_value(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if not text:
+        return default
+    if text in {"1", "true", "yes", "on", "y"}:
+        return True
+    if text in {"0", "false", "no", "off", "n"}:
+        return False
+    return default
+
+
 def _parallel_threads(config: dict[str, Any], key: str, default: int = 1) -> int:
     parallel_cfg = config.get("parallel", {})
     if not isinstance(parallel_cfg, dict):
@@ -174,6 +204,22 @@ def _is_workspace_plan(plan: Any) -> bool:
     return str(plan or "").strip().lower() in WORKSPACE_PLAN_TYPES
 
 
+def _response_excerpt(resp: Any, limit: int = 300) -> str:
+    text = str(getattr(resp, "text", "") or "")
+    if not text:
+        return ""
+    return text.replace("\r", "\\r").replace("\n", "\\n")[:limit]
+
+
+def _token_invalidated_detail(detail: str) -> bool:
+    lowered = str(detail or "").lower()
+    return any(marker in lowered for marker in TOKEN_INVALID_MARKERS)
+
+
+def _account_email(account: dict[str, Any]) -> str:
+    return str(account.get("email") or account.get("name") or "?")
+
+
 def _fetch_account_context(
     session,
     access_token: str,
@@ -185,9 +231,22 @@ def _fetch_account_context(
         timeout=30,
     )
     if resp.status_code != 200:
-        raise RuntimeError(f"check API failed: HTTP {resp.status_code}")
+        detail = _response_excerpt(resp)
+        suffix = f", body={detail}" if detail else ""
+        if resp.status_code in (401, 403) and _token_invalidated_detail(detail):
+            raise RuntimeError(
+                f"check API token invalidated: HTTP {resp.status_code}{suffix}"
+            )
+        raise RuntimeError(f"check API failed: HTTP {resp.status_code}{suffix}")
 
-    data = resp.json() if resp.text else {}
+    try:
+        data = resp.json() if resp.text else {}
+    except Exception as error:
+        detail = _response_excerpt(resp)
+        suffix = f", body={detail}" if detail else ""
+        raise RuntimeError(
+            f"check API returned non-JSON: HTTP {resp.status_code}{suffix}"
+        ) from error
     candidates = _extract_account_contexts(data)
     target_workspace = str(workspace_id or "").strip()
     selected = None
@@ -356,7 +415,163 @@ def _has_verified_workspace_context(account: dict[str, Any]) -> bool:
         bool(account.get("access_token"))
         and bool(account.get("chatgpt_account_id"))
         and _is_workspace_plan(account.get("plan_type"))
+        and account.get("refresh_status") != "failed"
+        and account.get("export_health_status") != "failed"
     )
+
+
+def _has_auth_invalid_join_result(account: dict[str, Any]) -> bool:
+    join_results = account.get("join_results")
+    if not isinstance(join_results, list):
+        return False
+    for result in join_results:
+        if not isinstance(result, dict):
+            continue
+        detail = " ".join(
+            str(result.get(key) or "")
+            for key in ("error", "body", "membership_detail")
+        )
+        if _token_invalidated_detail(detail):
+            return True
+    return False
+
+
+def _mark_refresh_status(
+    account: dict[str, Any],
+    status: str,
+    detail: str = "",
+) -> None:
+    account["refresh_status"] = status
+    account["refresh_checked_at"] = _now()
+    if detail:
+        account["refresh_error"] = detail
+    else:
+        account.pop("refresh_error", None)
+
+
+def _export_health_url(endpoint: str) -> str:
+    selected = str(endpoint or DEFAULT_HEALTH_CHECK_ENDPOINT).strip()
+    if selected.startswith("http://") or selected.startswith("https://"):
+        return selected
+    return HEALTH_CHECK_ENDPOINTS.get(selected.lower(), HEALTH_CHECK_ENDPOINTS["models"])
+
+
+def _check_export_token_health(
+    session,
+    account: dict[str, Any],
+    sub2api_cfg: dict[str, Any],
+) -> tuple[bool, str]:
+    access_token = str(account.get("access_token") or "").strip()
+    if not access_token:
+        return False, "missing access_token"
+
+    endpoint_name = str(
+        sub2api_cfg.get("health_check_endpoint") or DEFAULT_HEALTH_CHECK_ENDPOINT
+    ).strip()
+    endpoint_url = _export_health_url(endpoint_name)
+    timeout = _positive_int(sub2api_cfg.get("health_check_timeout"), 30)
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "oai-language": "en-US",
+    }
+    account_id = str(account.get("chatgpt_account_id") or "").strip()
+    if account_id:
+        headers["chatgpt-account-id"] = account_id
+
+    if endpoint_name.lower() == "check":
+        context = _fetch_account_context(session, access_token, account_id)
+        if not context.get("chatgpt_account_id"):
+            return False, "check API returned no account context"
+        if _is_workspace_plan(account.get("plan_type")) and not _is_workspace_plan(
+            context.get("plan_type")
+        ):
+            return False, f"check API resolved non-workspace plan={context.get('plan_type') or '?'}"
+        return True, "ok"
+
+    resp = session.get(endpoint_url, headers=headers, timeout=timeout)
+    detail = _response_excerpt(resp)
+    if resp.status_code == 200:
+        return True, "ok"
+    if resp.status_code in (401, 403) and _token_invalidated_detail(detail):
+        return False, f"token invalidated: HTTP {resp.status_code}, body={detail}"
+    suffix = f", body={detail}" if detail else ""
+    return False, f"health check failed: HTTP {resp.status_code}{suffix}"
+
+
+def _filter_healthy_export_accounts(
+    config: dict[str, Any],
+    account_pairs: list[tuple[dict[str, Any], dict[str, Any]]],
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    sub2api_cfg = config.get("sub2api", {})
+    if not isinstance(sub2api_cfg, dict):
+        sub2api_cfg = {}
+    if not _bool_config_value(sub2api_cfg.get("health_check"), False):
+        return account_pairs
+
+    delay = _nonnegative_float(sub2api_cfg.get("health_check_delay_seconds"), 0.0)
+    if delay:
+        logger.info(f"Waiting {delay:.1f}s before export health check")
+        time.sleep(delay)
+
+    proxy = str(config.get("proxy", {}).get("url", "")).strip()
+    retries = _positive_int(sub2api_cfg.get("health_check_retries"), 2)
+    backoff_ms = _positive_int(sub2api_cfg.get("health_check_backoff_ms"), 3000)
+    healthy: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    session = None
+    try:
+        session = _create_http_session(proxy)
+        for original, export in account_pairs:
+            email = _account_email(export)
+            last_error = ""
+            ok = False
+            for attempt in range(1, retries + 1):
+                try:
+                    ok, last_error = _check_export_token_health(
+                        session,
+                        export,
+                        sub2api_cfg,
+                    )
+                except Exception as error:
+                    ok = False
+                    last_error = str(error)
+                if ok:
+                    break
+                if attempt < retries:
+                    time.sleep(backoff_ms * attempt / 1000.0)
+
+            checked_at = _now()
+            original["export_health_checked_at"] = checked_at
+            export["export_health_checked_at"] = checked_at
+            if ok:
+                original["export_health_status"] = "ok"
+                original.pop("export_health_error", None)
+                export["export_health_status"] = "ok"
+                export.pop("export_health_error", None)
+                healthy.append((original, export))
+            else:
+                original["export_health_status"] = "failed"
+                original["export_health_error"] = last_error
+                export["export_health_status"] = "failed"
+                export["export_health_error"] = last_error
+                logger.warning(f"[{email}] Export health check failed: {last_error}")
+    finally:
+        if session:
+            session.close()
+
+    logger.info(
+        f"Export health check passed: {len(healthy)}/{len(account_pairs)} accounts"
+    )
+    return healthy
+
+
+def _count_exported_accounts(json_str: str) -> int:
+    try:
+        data = json.loads(json_str)
+    except Exception:
+        return 0
+    accounts = data.get("accounts") if isinstance(data, dict) else None
+    return len(accounts) if isinstance(accounts, list) else 0
 
 
 def _verify_workspace_membership(
@@ -718,6 +933,7 @@ def run_refresh_tokens(
 
         if not rt:
             logger.warning(f"[{email}] No refresh_token — skipping refresh")
+            _mark_refresh_status(account, "failed", "missing refresh_token")
             return account
 
         session = None
@@ -738,7 +954,14 @@ def run_refresh_tokens(
                 timeout=30,
             )
             if resp.status_code == 200:
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except Exception as error:
+                    detail = _response_excerpt(resp)
+                    raise RuntimeError(
+                        f"token refresh returned non-JSON: HTTP {resp.status_code}, "
+                        f"body={detail}"
+                    ) from error
                 new_at = data.get("access_token", "")
                 new_rt = data.get("refresh_token", "")
                 if new_at:
@@ -747,7 +970,11 @@ def run_refresh_tokens(
                     account["refresh_token"] = new_rt
                 logger.info(f"[{email}] Token refreshed")
             else:
-                logger.warning(f"[{email}] Token refresh failed: HTTP {resp.status_code}")
+                detail = _response_excerpt(resp)
+                raise RuntimeError(
+                    f"token refresh failed: HTTP {resp.status_code}"
+                    f"{', body=' + detail if detail else ''}"
+                )
 
             # Step 2: Call check API to get real plan_type and account_id
             at = account.get("access_token", "")
@@ -777,9 +1004,14 @@ def run_refresh_tokens(
                         f"plan={account.get('workspace_plan_type')} "
                         f"account_id={account.get('workspace_chatgpt_account_id')}"
                     )
+                _mark_refresh_status(account, "ok")
+            else:
+                _mark_refresh_status(account, "failed", "missing access_token after refresh")
 
         except Exception as e:
-            logger.warning(f"[{email}] Refresh/check error: {e}")
+            detail = str(e)
+            _mark_refresh_status(account, "failed", detail)
+            logger.warning(f"[{email}] Refresh/check error: {detail}")
         finally:
             if session:
                 session.close()
@@ -821,6 +1053,7 @@ def run_export(
             if (
                 account.get("team_login_status") == "ok"
                 and account.get("team_access_token")
+                and account.get("team_login_error") is None
                 and _is_workspace_plan(
                     account.get("team_plan_type") or account.get("plan_type")
                 )
@@ -832,15 +1065,20 @@ def run_export(
                 and _is_workspace_plan(
                     account.get("workspace_plan_type") or account.get("plan_type")
                 )
+                and account.get("refresh_status") != "failed"
+                and not _has_auth_invalid_join_result(account)
             )
-            or _has_verified_workspace_context(account)
+            or (
+                _has_verified_workspace_context(account)
+                and not _has_auth_invalid_join_result(account)
+            )
         ]
         if not accounts:
             raise RuntimeError(
                 "No verified team/workspace-scoped accounts available for export"
             )
 
-    export_accounts = []
+    export_pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for account in accounts:
         export = dict(account)
         if account.get("team_login_status") == "ok":
@@ -859,7 +1097,13 @@ def run_export(
         elif _has_verified_workspace_context(account):
             export["source_type"] = "workspace_check"
         # else: use registration tokens as-is
-        export_accounts.append(export)
+        export_pairs.append((account, export))
+
+    export_pairs = _filter_healthy_export_accounts(config, export_pairs)
+    if not export_pairs:
+        raise RuntimeError("No healthy accounts available for export")
+
+    export_accounts = [export for _, export in export_pairs]
 
     output_path = _resolve_export_output_path(config, output_file)
 
@@ -945,7 +1189,7 @@ def run_full_pipeline(
             }
 
     try:
-        _, actual_output = run_export(config, all_accounts, of)
+        json_str, actual_output = run_export(config, all_accounts, of)
     except RuntimeError as error:
         logger.error(f"Export aborted: {error}")
         return {
@@ -967,9 +1211,10 @@ def run_full_pipeline(
         else sum(
             1 for a in refreshed_accounts
             if _is_workspace_plan(a.get("plan_type"))
+            and a.get("refresh_status") != "failed"
         )
     )
-    exported = len(all_accounts)
+    exported = _count_exported_accounts(json_str)
 
     logger.info("=" * 60)
     logger.info(
